@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ASSEMBLY_JAR="$1"
+WORKDIR="$2"
+
+rm -rf "$WORKDIR"
+
+mkdir -p "$WORKDIR/layer-0"
+(cd "$WORKDIR/layer-0" && jar -xf "$ASSEMBLY_JAR" || true)
+
+##
+# Top level files, eg: application.conf, reference.conf, etc.
+##
+mkdir -p "$WORKDIR/layer-1"
+find "$WORKDIR/layer-0" -mindepth 1 -maxdepth 1 -type f | xargs mv -t "$WORKDIR/layer-1"
+
+function layers() {
+  du -h "$WORKDIR/layer-0" -S -t 2M | sort -hr | awk '{print$2}' | xargs realpath -m --relative-to "$WORKDIR/layer-0"
+}
+
+LAYER=1
+for dir in $(layers); do
+  if [ ! -d "$WORKDIR/layer-0/$dir" ]; then # only directories
+    continue
+  fi
+  LAYER=$((LAYER+1))
+  name="layer-$LAYER"
+  mkdir -p "${WORKDIR}/$name/$(dirname "$dir")"
+  mv "${WORKDIR}/layer-0/$dir" "${WORKDIR}/$name/$dir"
+done
+
+
+###
+# Create a layers.nix file containing a derivation for each directory.
+###
+cat <<-EOF > "$WORKDIR/layers.nix"
+{ pkgs ? import <nixpkgs> {}, ...}: [
+EOF
+
+for n in $(seq 0 $LAYER); do
+cat <<-EOF >> "$WORKDIR/layers.nix"
+(pkgs.stdenvNoCC.mkDerivation {
+  name = "layer-$n";
+  version = 0;
+  phases = "install";
+  src = ./layer-$n;
+  install = ''
+  cp -r "\$src" "\$out"
+  '';
+})
+EOF
+done
+
+cat <<-EOF >> "$WORKDIR/layers.nix"
+]
+EOF
