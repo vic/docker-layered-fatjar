@@ -10,7 +10,7 @@ mkdir -p "$WORKDIR/layer-0"
 (cd "$WORKDIR/layer-0" && jar -xf "$ASSEMBLY_JAR" || true)
 
 ##
-# Top level files, eg: application.conf, aleron.conf, etc.
+# Top level files, eg: application.conf, reference.conf, etc.
 ##
 mkdir -p "$WORKDIR/layer-1"
 find "$WORKDIR/layer-0" -mindepth 1 -maxdepth 1 -type f | xargs mv -t "$WORKDIR/layer-1"
