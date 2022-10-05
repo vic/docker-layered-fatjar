@@ -10,60 +10,70 @@ Split a fat-jar into reusable docker layers.
 
 OPTIONS:
 
--h, --help        Print this help and exit.
+-h, --help            Print this help and exit.
 
--t, --top-layer   Create a layer for top-level files inside fatjar.
-                  This layer is likely used for .conf/properties files.
+-r, --rm              Remove <output-directory> before doing anything else.
 
--a, --at PATH     Create a layer from content at PATH inside fatjar.
-                  This option can be specified many times.
+-- ARGS               Indicate aguments for docker build or nix build.
 
--s, --size SIZE   Create a layer for directories exeeding SIZE.
-                  Default SIZE is: 2M.
+-B, --docker-build    Run Docker build.
+                      You might want to use -- to indicate arguments.
 
--l, --limit N     Create at most N layers. Docker maximum is 127.
+-N, --nix-build       Build a derivation from nix streamLayeredImage.
+                      You might want to use -- to indicate arguments.
+                      Implies --nix.
 
--d, --dir PATH    Place content at PATH inside the docker fileystem.
-                  Defaults to /app.
+-t, --top-layer       Create a layer for top-level files inside fatjar.
+                      This layer is likely used for .conf/properties files.
 
--c, --classpath   Print the classpath that should be given to java.
+-a, --add-layer PATH  Create a layer from directory at PATH inside fatjar.
+                      This option can be specified many times.
 
--n, --nix         Generate a layers.nix file which can be given
-                  to nixpkgs.dockerTools.buildLayeredImage.
+-s, --size SIZE       Create a layer for directories exeeding SIZE.
+                      Default SIZE is: 2M.
 
--j, --jars        Create a jar for each layer content, instead of
-                  using expanded files.
+-l, --limit N         Create at most N layers. Docker maximum is 127.
 
--r, --rm          Remove <output-directory> before doing anything else.
+-c, --content PATH    Place layers at PATH inside the docker fileystem.
+                      Defaults to /app. Layers will be at /app/layer-*.jar
+
+-m, --main CLASS      Use CLASS as entrypoint.
+                      Defaults to Main-Class from fatjar manifest.
+
+-n, --nix             Generate a layers.nix file which can be used
+                      as content for nixpkgs.dockerTools.buildLayeredImage.
 
 Homepage: https://github.com/vic/docker-layered-fatjar
 EOF
   exit 1
 }
 
-ATS=()
-ATDIR="/app"
+EXPLICIT_LAYERS=()
+CONTENT_ROOT="/app"
 SIZE="2M"
 LIMIT=127
 NIXGEN=""
-USEJAR=""
 USETOP=""
 RMOUT=""
 ASSEMBLY_JAR=""
 WORKDIR=""
 FROMBASE="gcr.io/distroless/java"
+MAIN=""
+RUN_DOCKER_BUILD=""
+RUN_NIX_BUILD=""
+ARGS=()
 
 while test -n "${1:-}"; do
   case "$1" in
     "-h" | "--help")
       usage
       ;;
-    "-a" | "--at")
-      ATS+=("$2")
+    "-a" | "--add-layer")
+      EXPLICIT_LAYERS+=("$2")
       shift; shift
       ;;
-    "-d" | "--dir")
-      ATDIR="$2"
+    "-c" | "--content")
+      CONTENT_ROOT="$2"
       shift; shift
       ;;
     "-l" | "--limit")
@@ -74,21 +84,35 @@ while test -n "${1:-}"; do
       SIZE="$2"
       shift; shift
       ;;
+    "-m" | "--main")
+      MAIN="$2"
+      shift; shift
+      ;;
     "-t" | "--top-layer")
       USETOP="true"
+      shift
+      ;;
+    "-B" | "--docker-build")
+      RUN_DOCKER_BUILD="true"
+      shift
+      ;;
+    "-N" | "--nix-build")
+      NIXGEN="true"
+      RUN_NIX_BUILD="true"
       shift
       ;;
     "-n" | "--nix")
       NIXGEN="true"
       shift
       ;;
-    "-j" | "--jars")
-      USEJAR="true"
-      shift
-      ;;
     "-r" | "--rm")
       RMOUT="true"
       shift
+      ;;
+    "--")
+      shift
+      ARGS=("$@")
+      break
       ;;
     *)
       if test -z "$ASSEMBLY_JAR"; then
@@ -122,6 +146,10 @@ LAYER=0
 mkdir -p "$WORKDIR/layer-$LAYER"
 (cd "$WORKDIR/layer-$LAYER" && jar -xf "$ASSEMBLY_JAR" || true)
 
+if test -z "$MAIN" && test -f "$WORKDIR/layer-0/META-INF/MANIFEST.MF"; then
+  MAIN="$(awk '/Main-Class:/{print$2}' $WORKDIR/layer-0/META-INF/MANIFEST.MF | tr -d '\r\n')"
+fi
+
 if test -n "$USETOP"; then
   LAYER=$((LAYER+1))
   ##
@@ -131,7 +159,7 @@ if test -n "$USETOP"; then
   find "$WORKDIR/layer-0" -mindepth 1 -maxdepth 1 -type f | xargs mv -t "$WORKDIR/layer-$LAYER"
 fi
 
-for dir in "${ATS[@]}"; do
+for dir in "${EXPLICIT_LAYERS[@]}"; do
   if test "$LAYER" -gt "$LIMIT"; then
     break
   fi
@@ -162,12 +190,10 @@ for dir in $(dirs_exeeding_size); do
 done
 
 
-if test -n "$USEJAR"; then
-  for n in $(seq 0 $LAYER); do
-    jar -c -M -f "$WORKDIR/layer-$n.jar" -C "$WORKDIR/layer-$n" .
-    rm -rf "$WORKDIR/layer-$n"
-  done
-fi
+for n in $(seq 0 $LAYER); do
+  jar -c -M -f "$WORKDIR/layer-$n.jar" -C "$WORKDIR/layer-$n" .
+  rm -rf "$WORKDIR/layer-$n"
+done
 
 # Generate classpath.txt
 CPFILE="$WORKDIR/classpath.txt"
@@ -176,36 +202,37 @@ for n in $(seq 0 $LAYER); do
   if test "$n" -gt 0; then
     printf ":" >> "$CPFILE"
   fi
-  if test -n "$USEJAR"; then
-    printf "%s" "$ATDIR/layer-$n.jar" >> "$CPFILE"
-  else
-    printf "%s" "$ATDIR/layer-$n" >> "$CPFILE"
-  fi
+  printf "%s" "$CONTENT_ROOT/layer-$n.jar" >> "$CPFILE"
 done
+CPVAL="$(< $CPFILE)"
 
 # Generate Dockerfile
 DKFILE="$WORKDIR/Dockerfile"
-printf "FROM $FROMBASE\n" > "$DKFILE"
+echo "FROM $FROMBASE" > "$DKFILE"
 for n in $(seq 0 $LAYER); do
   if test "$n" -gt 0; then
     printf "\n" >> "$DKFILE"
   fi
-  if test -n "$USEJAR"; then
-    printf "COPY %s %s" "layer-$n.jar" "$ATDIR" >> "$DKFILE"
-  else
-    printf "COPY %s %s" "layer-$n" "$ATDIR" >> "$DKFILE"
-  fi
+  printf "COPY %s %s" "layer-$n.jar" "$CONTENT_ROOT/" >> "$DKFILE"
 done
-printf "\nENV CLASSPATH %s\n" "$(< "$CPFILE")" >> "$DKFILE"
+printf "\n" >> "$DKFILE"
+
+cat <<-EOF >> "$DKFILE"
+ENV CLASSPATH "$CPVAL"
+CMD []
+EOF
+if test -n "$MAIN"; then
+  cat <<-EOF >> "$DKFILE"
+ENTRYPOINT [ "java", "$MAIN" ]
+EOF
+fi
 
 function gen_layers_nix() {
 ###
 # Create a layers.nix file containing a derivation for each directory.
 ###
 cat <<-EOF > "$WORKDIR/layers.nix"
-{ pkgs ? import <nixpkgs> {}, ...}: let
- useJar = ${USEJAR:-false};
-in [
+{ pkgs ? import <nixpkgs> {}, ...}: [
 EOF
 
 for n in $(seq 0 $LAYER); do
@@ -214,10 +241,10 @@ cat <<-EOF >> "$WORKDIR/layers.nix"
   name = "layer-$n";
   version = 0;
   phases = "install";
-  src = if useJar then ./layer-$n.jar else ./layer-$n;
+  src = ./layer-$n.jar;
   install = ''
-  mkdir -p "\$out/$ATDIR"
-  cp -r "\$src" "\$out/$ATDIR"
+  mkdir -p "\$out/$CONTENT_ROOT"
+  cp -r "\$src" "\$out/$CONTENT_ROOT"
   '';
 })
 EOF
@@ -230,6 +257,14 @@ EOF
 
 if test -n "$NIXGEN"; then
   gen_layers_nix
+fi
+
+if test -n "$RUN_DOCKER_BUILD" && test -z "$RUN_NIX_BUILD"; then
+  docker build "$WORKDIR" "${ARGS[@]}"
+fi
+
+if test -n "$RUN_NIX_BUILD" && test -z "$RUN_DOCKER_BUILD"; then
+  nix build -f "$WORKDIR/default.nix" --impure -I workdir="$WORKDIR" "${ARGS[@]}"
 fi
 
 exit 0
