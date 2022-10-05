@@ -2,6 +2,7 @@
 *.log
 *.jar
 .envrc
+.direnv
 layers
 out
 result
