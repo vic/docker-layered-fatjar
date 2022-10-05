@@ -135,11 +135,24 @@ if test -n "$USETOP"; then
   find "$WORKDIR/layer-0" -mindepth 1 -maxdepth 1 -type f | xargs mv -t "$WORKDIR/layer-$LAYER"
 fi
 
-function layers() {
+for dir in "${ATS[@]}"; do
+  if test "$LAYER" -gt "$LIMIT"; then
+    break
+  fi
+  if [ ! -d "$WORKDIR/layer-0/$dir" ]; then # only directories
+    continue
+  fi
+  LAYER=$((LAYER+1))
+  name="layer-$LAYER"
+  mkdir -p "${WORKDIR}/$name/$(dirname "$dir")"
+  mv "${WORKDIR}/layer-0/$dir" "${WORKDIR}/$name/$dir"
+done
+
+function dirs_exeeding_size() {
   du -h "$WORKDIR/layer-0" -S -t $SIZE | sort -hr | awk '{print$2}' | xargs realpath -m --relative-to "$WORKDIR/layer-0"
 }
 
-for dir in $(layers); do
+for dir in $(dirs_exeeding_size); do
   if test "$LAYER" -gt "$LIMIT"; then
     break
   fi
