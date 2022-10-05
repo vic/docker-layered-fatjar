@@ -31,7 +31,7 @@ OPTIONS:
 -n, --nix         Generate a layers.nix file which can be given
                   to nixpkgs.dockerTools.buildLayeredImage.
 
--j, --jar         Create a jar for each layer content, instead of
+-j, --jars        Create a jar for each layer content, instead of
                   using expanded files.
 
 -r, --rm          Remove <output-directory> before doing anything else.
@@ -45,13 +45,13 @@ ATS=()
 ATDIR="/app"
 SIZE="2M"
 LIMIT=127
-PRINT=""
 NIXGEN=""
 USEJAR=""
 USETOP=""
 RMOUT=""
 ASSEMBLY_JAR=""
 WORKDIR=""
+FROMBASE="gcr.io/distroless/java"
 
 while test -n "${1:-}"; do
   case "$1" in
@@ -82,12 +82,8 @@ while test -n "${1:-}"; do
       NIXGEN="true"
       shift
       ;;
-    "-j" | "--jar")
+    "-j" | "--jars")
       USEJAR="true"
-      shift
-      ;;
-    "-p" | "--print")
-      PRINT="true"
       shift
       ;;
     "-r" | "--rm")
@@ -149,7 +145,7 @@ for dir in "${ATS[@]}"; do
 done
 
 function dirs_exeeding_size() {
-  du -h "$WORKDIR/layer-0" -S -t $SIZE | sort -hr | awk '{print$2}' | xargs realpath -m --relative-to "$WORKDIR/layer-0"
+  du -h "$WORKDIR/layer-0" -S -t $SIZE | sort -hr | awk '{print $2}' | xargs realpath -m --relative-to "$WORKDIR/layer-0"
 }
 
 for dir in $(dirs_exeeding_size); do
@@ -173,13 +169,42 @@ if test -n "$USEJAR"; then
   done
 fi
 
+# Generate classpath.txt
+CPFILE="$WORKDIR/classpath.txt"
+printf "" > "$CPFILE"
+for n in $(seq 0 $LAYER); do
+  if test "$n" -gt 0; then
+    printf ":" >> "$CPFILE"
+  fi
+  if test -n "$USEJAR"; then
+    printf "%s" "$ATDIR/layer-$n.jar" >> "$CPFILE"
+  else
+    printf "%s" "$ATDIR/layer-$n" >> "$CPFILE"
+  fi
+done
+
+# Generate Dockerfile
+DKFILE="$WORKDIR/Dockerfile"
+printf "FROM $FROMBASE\n" > "$DKFILE"
+for n in $(seq 0 $LAYER); do
+  if test "$n" -gt 0; then
+    printf "\n" >> "$DKFILE"
+  fi
+  if test -n "$USEJAR"; then
+    printf "COPY %s %s" "layer-$n.jar" "$ATDIR" >> "$DKFILE"
+  else
+    printf "COPY %s %s" "layer-$n" "$ATDIR" >> "$DKFILE"
+  fi
+done
+printf "\nENV CLASSPATH %s\n" "$(< "$CPFILE")" >> "$DKFILE"
+
 function gen_layers_nix() {
 ###
 # Create a layers.nix file containing a derivation for each directory.
 ###
 cat <<-EOF > "$WORKDIR/layers.nix"
 { pkgs ? import <nixpkgs> {}, ...}: let
- useJar = "${USEJAR:-false}";
+ useJar = ${USEJAR:-false};
 in [
 EOF
 
