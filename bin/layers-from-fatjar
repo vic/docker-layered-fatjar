@@ -1,26 +1,148 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ASSEMBLY_JAR="$1"
-WORKDIR="$2"
+function usage() {
+cat <<-EOF
+USAGE: $0 [options] <fat.jar> <output-directory>
 
-rm -rf "$WORKDIR"
+Split a fat-jar into reusable docker layers.
 
-mkdir -p "$WORKDIR/layer-0"
-(cd "$WORKDIR/layer-0" && jar -xf "$ASSEMBLY_JAR" || true)
 
-##
-# Top level files, eg: application.conf, reference.conf, etc.
-##
-mkdir -p "$WORKDIR/layer-1"
-find "$WORKDIR/layer-0" -mindepth 1 -maxdepth 1 -type f | xargs mv -t "$WORKDIR/layer-1"
+OPTIONS:
 
-function layers() {
-  du -h "$WORKDIR/layer-0" -S -t 2M | sort -hr | awk '{print$2}' | xargs realpath -m --relative-to "$WORKDIR/layer-0"
+-h, --help        Print this help and exit.
+
+-t, --top-layer   Create a layer for top-level files inside fatjar.
+                  This layer is likely used for .conf/properties files.
+
+-a, --at PATH     Create a layer from content at PATH inside fatjar.
+                  This option can be specified many times.
+
+-s, --size SIZE   Create a layer for directories exeeding SIZE.
+                  Default SIZE is: 2M.
+
+-l, --limit N     Create at most N layers. Docker maximum is 127.
+
+-d, --dir PATH    Place content at PATH inside the docker fileystem.
+                  Defaults to /app.
+
+-c, --classpath   Print the classpath that should be given to java.
+
+-n, --nix         Generate a layers.nix file which can be given
+                  to nixpkgs.dockerTools.buildLayeredImage.
+
+-j, --jar         Create a jar for each layer content, instead of
+                  using expanded files.
+
+-r, --rm          Remove <output-directory> before doing anything else.
+
+Homepage: https://github.com/vic/docker-layered-fatjar
+EOF
+  exit 1
 }
 
-LAYER=1
+ATS=()
+ATDIR="/app"
+SIZE="2M"
+LIMIT=127
+PRINT=""
+NIXGEN=""
+USEJAR=""
+USETOP=""
+RMOUT=""
+ASSEMBLY_JAR=""
+WORKDIR=""
+
+while test -n "${1:-}"; do
+  case "$1" in
+    "-h" | "--help")
+      usage
+      ;;
+    "-a" | "--at")
+      ATS+=("$2")
+      shift; shift
+      ;;
+    "-d" | "--dir")
+      ATDIR="$2"
+      shift; shift
+      ;;
+    "-l" | "--limit")
+      LIMIT="$2"
+      shift; shift
+      ;;
+    "-s" | "--size")
+      SIZE="$2"
+      shift; shift
+      ;;
+    "-t" | "--top-layer")
+      USETOP="true"
+      shift
+      ;;
+    "-n" | "--nix")
+      NIXGEN="true"
+      shift
+      ;;
+    "-j" | "--jar")
+      USEJAR="true"
+      shift
+      ;;
+    "-p" | "--print")
+      PRINT="true"
+      shift
+      ;;
+    "-r" | "--rm")
+      RMOUT="true"
+      shift
+      ;;
+    *)
+      if test -z "$ASSEMBLY_JAR"; then
+        ASSEMBLY_JAR="$(realpath "$1")"
+        shift
+        continue
+      fi
+      if test -z "$WORKDIR"; then
+        WORKDIR="$1"
+        shift
+        continue
+      fi
+      break
+      ;;
+  esac
+done
+
+if test -z "$ASSEMBLY_JAR"; then
+  usage
+fi
+
+if test -z "$WORKDIR"; then
+  WORKDIR="$PWD/layers"
+fi
+
+if test -n "$RMOUT"; then
+  rm -rf "$WORKDIR"
+fi
+
+LAYER=0
+mkdir -p "$WORKDIR/layer-$LAYER"
+(cd "$WORKDIR/layer-$LAYER" && jar -xf "$ASSEMBLY_JAR" || true)
+
+if test -n "$USETOP"; then
+  LAYER=$((LAYER+1))
+  ##
+  # Top level files, eg: application.conf, reference.conf, etc.
+  ##
+  mkdir -p "$WORKDIR/layer-$LAYER"
+  find "$WORKDIR/layer-0" -mindepth 1 -maxdepth 1 -type f | xargs mv -t "$WORKDIR/layer-$LAYER"
+fi
+
+function layers() {
+  du -h "$WORKDIR/layer-0" -S -t $SIZE | sort -hr | awk '{print$2}' | xargs realpath -m --relative-to "$WORKDIR/layer-0"
+}
+
 for dir in $(layers); do
+  if test "$LAYER" -gt "$LIMIT"; then
+    break
+  fi
   if [ ! -d "$WORKDIR/layer-0/$dir" ]; then # only directories
     continue
   fi
@@ -31,11 +153,21 @@ for dir in $(layers); do
 done
 
 
+if test -n "$USEJAR"; then
+  for n in $(seq 0 $LAYER); do
+    jar -c -M -f "$WORKDIR/layer-$n.jar" -C "$WORKDIR/layer-$n" .
+    rm -rf "$WORKDIR/layer-$n"
+  done
+fi
+
+function gen_layers_nix() {
 ###
 # Create a layers.nix file containing a derivation for each directory.
 ###
 cat <<-EOF > "$WORKDIR/layers.nix"
-{ pkgs ? import <nixpkgs> {}, ...}: [
+{ pkgs ? import <nixpkgs> {}, ...}: let
+ useJar = "${USEJAR:-false}";
+in [
 EOF
 
 for n in $(seq 0 $LAYER); do
@@ -44,9 +176,10 @@ cat <<-EOF >> "$WORKDIR/layers.nix"
   name = "layer-$n";
   version = 0;
   phases = "install";
-  src = ./layer-$n;
+  src = if useJar then ./layer-$n.jar else ./layer-$n;
   install = ''
-  cp -r "\$src" "\$out"
+  mkdir -p "\$out/$ATDIR"
+  cp -r "\$src" "\$out/$ATDIR"
   '';
 })
 EOF
@@ -55,3 +188,10 @@ done
 cat <<-EOF >> "$WORKDIR/layers.nix"
 ]
 EOF
+}
+
+if test -n "$NIXGEN"; then
+  gen_layers_nix
+fi
+
+exit 0
