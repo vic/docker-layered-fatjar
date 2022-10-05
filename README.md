@@ -4,11 +4,24 @@ Use nix to create re-usable Docker layered images from java fat-jar apps.
 
 ## Motivation
 
-Deploying fat-jar applications to kubernetes can become 
+Deploying fat-jar scala/java applications to kubernetes requires creating a docker
+image that normally endups being very big since it has to include at least
+a JVM runtime and your fat-jar file. 
 
- When creating docker images it's much better to re-use previous layers
- that have not changed. This utility allows us to re-use most of the
- content from a fat jar.
+However, most of the time, your application code is only a tiny fraction of
+what makes up the fat-jar. Most likely all other content just comes from the
+libraries and transitive dependencies your project has. Nevertheless, even if
+you only make a simple change on your codebase, the whole fat-jar files gets
+generated again, which means the docker image also has to be generated again.
+
+Re-creating the image and pushing to a container registry becomes problematic
+since each time you are building and sending another >700M image. 
+Even if your image includes only a [distroless JVM runtime](https://github.com/GoogleContainerTools/distroless/tree/main/java) 
+plus your application fat-jar, you endup re-using almost nothing.
+
+This project is intended to help you split the fat-jar into reusable docker
+layers, so that building and pushing to a Container Registry will reuse all
+other layers that had not changed.
 
 ### How
 
