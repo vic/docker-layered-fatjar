@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 function usage() {
 cat <<-EOF
-USAGE: $0 [options] <fat.jar> <output-directory>
+USAGE: $0 [options] <fat.jar> [output-directory]
 
 Split a fat-jar into reusable docker layers.
 
@@ -17,10 +17,12 @@ OPTIONS:
 -- ARGS               Indicate aguments for docker build or nix build.
 
 -B, --docker-build    Run Docker build.
-                      You might want to use -- to indicate arguments.
+                      You might want to use -- to indicate arguments for 'docker build'.
+                      eg: '-- -t my-app:latest'
 
 -N, --nix-build       Build a derivation from nix streamLayeredImage.
-                      You might want to use -- to indicate arguments.
+                      You might want to use -- to indicate arguments for 'nix build'.
+                      eg: '-- --show-trace'
                       Implies --nix.
 
 -t, --top-layer       Create a layer for top-level files inside fatjar.
@@ -40,8 +42,8 @@ OPTIONS:
 -m, --main CLASS      Use CLASS as entrypoint.
                       Defaults to Main-Class from fatjar manifest.
 
--n, --nix             Generate a layers.nix file which can be used
-                      as content for nixpkgs.dockerTools.buildLayeredImage.
+-n, --nix             Generate a flake.nix file producing a
+                      nixpkgs.dockerTools.buildLayeredImage.
 
 Homepage: https://github.com/vic/docker-layered-fatjar
 EOF
@@ -227,36 +229,19 @@ ENTRYPOINT [ "java", "$MAIN" ]
 EOF
 fi
 
-function gen_layers_nix() {
-###
-# Create a layers.nix file containing a derivation for each directory.
-###
-cat <<-EOF > "$WORKDIR/layers.nix"
-{ pkgs ? import <nixpkgs> {}, ...}: [
-EOF
-
-for n in $(seq 0 $LAYER); do
-cat <<-EOF >> "$WORKDIR/layers.nix"
-(pkgs.stdenvNoCC.mkDerivation {
-  name = "layer-$n";
-  version = 0;
-  phases = "install";
-  src = ./layer-$n.jar;
-  install = ''
-  mkdir -p "\$out/$CONTENT_ROOT"
-  cp -r "\$src" "\$out/$CONTENT_ROOT"
-  '';
-})
-EOF
-done
-
-cat <<-EOF >> "$WORKDIR/layers.nix"
-]
-EOF
-}
-
 if test -n "$NIXGEN"; then
-  gen_layers_nix
+  cp "${NIX_TEMPLATE}"/*.nix "$WORKDIR/"
+  if ! test -f "$WORKDIR/baseImage.nix"; then
+    echo nix-prefetch-docker "$FROMBASE" >&2
+    nix-prefetch-docker "$FROMBASE" > "$WORKDIR/baseImage.nix"
+  fi
+  cat <<-EOF > "$WORKDIR/args.nix"
+{ pkgs, ...}: {
+  nLayers = $LAYER + 1; # Exclusive.
+  contentRoot = "$CONTENT_ROOT";
+  main = "$MAIN";
+}
+EOF
 fi
 
 if test -n "$RUN_DOCKER_BUILD" && test -z "$RUN_NIX_BUILD"; then
@@ -264,7 +249,16 @@ if test -n "$RUN_DOCKER_BUILD" && test -z "$RUN_NIX_BUILD"; then
 fi
 
 if test -n "$RUN_NIX_BUILD" && test -z "$RUN_DOCKER_BUILD"; then
-  nix build -f "$WORKDIR/default.nix" --impure -I workdir="$WORKDIR" "${ARGS[@]}"
+  (cd "$WORKDIR"; git init; git add . ; nix build "$WORKDIR" "${ARGS[@]}")
+  cat <<-EOF
+To load your image locally, use:
+
+  $WORKDIR/result/bin/load-to-local-docker
+
+To push your image to a remote container registry, use: (no docker daemon needed)
+
+  $WORKDIR/result/bin/copy-to-docker-registry docker://some_docker_registry/myimage:tag
+EOF
 fi
 
 exit 0

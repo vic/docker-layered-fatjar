@@ -10,7 +10,7 @@ let
       packages.default = main;
       apps.default = flake-utils.lib.mkApp { drv = main; };
       devShells.default = pkgs.mkShell {
-        packages = with pkgs; [ main mill jre_headless docker-client ];
+        packages = with pkgs; [ main mill jre_headless docker-client nix-prefetch-docker ];
       };
     });
 in global // flake-utils.lib.eachDefaultSystem per-system
