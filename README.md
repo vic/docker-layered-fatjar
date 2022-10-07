@@ -30,7 +30,6 @@ other layers that had not changed.
 
  It will create a layers.nix file containing derivations for each directory.
  This layers.nix can be used as contents for pkgs.dockerTools.streamLayeredImage.
- See: terraform/nix/terrniax/lib/layered-image.nix
 
  The strategy for separating layers is using the following command to determine
  which directories inside the jar are greater than 2M:
@@ -38,7 +37,7 @@ other layers that had not changed.
  (mkdir exapanded; cd expanded; jar -xvf assembly.jar) && \
  (du -h expanded/ -t 2M -S | sort -hr)
 
- All top level files (application.conf, jquery.js, etc) in a single layer.
+ All top level files (application.conf,  etc) in a single layer.
 
 ###
  Usage: bin/split-assembly-jar [assembly.jar] [target-directory]
