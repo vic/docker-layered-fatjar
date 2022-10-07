@@ -46,17 +46,17 @@ nix run github:vic/docker-layered-fatjar -- --help
 
 # Or install it locally if you prefer. Installed binary is named: layers-from-fatjar
 nix profile install github:vic/docker-layered-fatjar
-layers-from-fatjar --helo
+layers-from-fatjar --help
 ```
 
-* If you dont have Nix, you can still download the bin/layers-from-fatjar script and
+* If you dont have Nix, you can still download the `bin/layers-from-fatjar` script and
 make sure your system has [this dependencies installed](https://github.com/vic/docker-layered-fatjar/blob/main/nix/packages/layers-from-fatjar.nix#L8)
 
 
 
 ### Usage
 
-The following will split fatjar.jar and build a docker image named myapp:layered
+The following will split `fatjar.jar` file and build a docker image named `myapp:layered`
 
 ```
 nix run github:vic/docker-layered-fatjar -- --docker-build fatjar.jar -- --tag myapp:layered
