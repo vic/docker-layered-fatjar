@@ -25,21 +25,22 @@ other layers that had not changed.
 
 ### How
 
- Splits an assembly-jar (FAT.jar) into many layers intended for building
- a layered Docker image.
+This program will expand a fatjar and use the du utility to find directories
+that are over a size threshold (default 2M) and create a separate jar for 
+each of those directories. 
 
- It will create a layers.nix file containing derivations for each directory.
- This layers.nix can be used as contents for pkgs.dockerTools.streamLayeredImage.
+It can also be given a list of explicit directories to separate into a layer
+using the --add-layer option. See --help.
 
- The strategy for separating layers is using the following command to determine
- which directories inside the jar are greater than 2M:
+It's also possible to create a layer containing only the fatjar toplevel files
+which will change only if you edit /application.conf for example.
 
- (mkdir exapanded; cd expanded; jar -xvf assembly.jar) && \
- (du -h expanded/ -t 2M -S | sort -hr)
+### Usage
 
- All top level files (application.conf,  etc) in a single layer.
+If you already have nix installed, you can run this flake directly:
 
-###
- Usage: bin/split-assembly-jar [assembly.jar] [target-directory]
+```
+nix run github:vic/docker-layered-fatjar -- --help # see all options.
+nix run github:vic/docker-layered-fatjar -- --docker-build fatjar.jar -- --tag myapp:layered
+```
 
- Each resulting subdirectory of [target-directory] can be considered a layer.
