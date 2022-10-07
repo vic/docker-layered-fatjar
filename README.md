@@ -35,12 +35,30 @@ using the --add-layer option. See --help.
 It's also possible to create a layer containing only the fatjar toplevel files
 which will change only if you edit /application.conf for example.
 
-### Usage
+### Installation
 
-If you already have nix installed, you can run this flake directly:
+
+* If you already have Nix installed, you can run it directly using:
 
 ```
-nix run github:vic/docker-layered-fatjar -- --help # see all options.
+# Run directly using this project flake.
+nix run github:vic/docker-layered-fatjar -- --help
+
+# Or install it locally if you prefer. Installed binary is named: layers-from-fatjar
+nix profile install github:vic/docker-layered-fatjar
+layers-from-fatjar --helo
+```
+
+* If you dont have Nix, you can still download the bin/layers-from-fatjar script and
+make sure your system has [this dependencies installed](https://github.com/vic/docker-layered-fatjar/blob/main/nix/packages/layers-from-fatjar.nix#L8)
+
+
+
+### Usage
+
+The following will split fatjar.jar and build a docker image named myapp:layered
+
+```
 nix run github:vic/docker-layered-fatjar -- --docker-build fatjar.jar -- --tag myapp:layered
 ```
 
